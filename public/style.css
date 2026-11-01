@@ -1,0 +1,416 @@
+:root {
+  --bg: #1a1b26;
+  --term-bg: #24283b;
+  --fg: #c0caf5;
+  --dim: #565f89;
+  --accent: #7aa2f7;
+  --select: #e0af68;
+  --green: #9ece6a;
+  --border: #2f334d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ------------------------------------------------------------- sidebar */
+
+#sidebar {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  border-right: 1px solid var(--border);
+}
+
+#sidebar h1 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+#rev-label {
+  color: var(--dim);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+/* thread */
+#thread {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.msg {
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.msg-head {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+
+.msg-body {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.msg-user {
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+}
+
+.msg-agent {
+  background: color-mix(in srgb, var(--accent) 10%, var(--term-bg));
+  border-left: 3px solid var(--accent);
+}
+
+.msg-question {
+  border-left-color: var(--select);
+}
+
+.msg-summary {
+  border-left-color: var(--green);
+}
+
+.msg-system {
+  color: var(--dim);
+  font-size: 11.5px;
+  background: none;
+  padding: 2px 10px;
+}
+
+.msg details {
+  margin-top: 6px;
+}
+
+.msg summary {
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+.msg ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* composer */
+#composer {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+#chips-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+#chips {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.chips-hint {
+  color: var(--dim);
+  font-size: 11.5px;
+  align-self: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--term-bg);
+  border: 1px solid var(--select);
+  color: var(--fg);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 2px 4px 2px 8px;
+}
+
+.chip b {
+  color: var(--select);
+  font-weight: 700;
+}
+
+.chip button {
+  all: unset;
+  cursor: pointer;
+  color: var(--dim);
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.chip button:hover {
+  color: var(--fg);
+}
+
+#clear-selection {
+  all: unset;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+#clear-selection:hover {
+  color: var(--fg);
+}
+
+#composer-input {
+  width: 100%;
+  resize: none;
+  padding: 8px 10px;
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+#composer-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.composer-row .hint {
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
+#send-btn {
+  background: var(--accent);
+  color: #1a1b26;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#send-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* --------------------------------------------------------- terminal frame */
+
+#stage {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 24px;
+}
+
+#term {
+  position: relative;
+  background: var(--term-bg);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.45);
+  font-family: "JetBrains Mono", "Fira Code", Menlo, monospace;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--fg);
+  overflow: hidden;
+}
+
+/* every spec node is an absolutely-positioned cell-aligned box */
+.node {
+  position: absolute;
+  white-space: pre;
+  cursor: pointer;
+  user-select: none;
+}
+
+.node:hover {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -1px;
+}
+
+.node-root {
+  cursor: default;
+}
+
+/* selected: outline + numbered badge */
+.node.selected {
+  outline: 2px solid var(--select);
+  outline-offset: -1px;
+  z-index: 2;
+}
+
+.node.selected::before {
+  content: attr(data-sel);
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--select);
+  color: #1a1b26;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 50%;
+  z-index: 3;
+}
+
+/* annotation pin (element has a persistent note) */
+.node[data-has-annotation]::after {
+  content: "★";
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  color: var(--select);
+  font-size: 10px;
+  z-index: 3;
+}
+
+/* dragged + committed regions */
+.region-drag,
+.region-overlay {
+  position: absolute;
+  border: 1px dashed var(--select);
+  background: color-mix(in srgb, var(--select) 12%, transparent);
+  pointer-events: none;
+  z-index: 4;
+  border-radius: 2px;
+}
+
+.region-drag::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -16px;
+  left: 0;
+  color: var(--select);
+  font-size: 10px;
+  font-family: "JetBrains Mono", Menlo, monospace;
+}
+
+.chip-region {
+  border-color: var(--green);
+}
+
+.chip-region b {
+  color: var(--green);
+}
+
+/* R2-L4: iframes swallow mouse events — the sandboxed content isn't
+   interactive anyway, so let clicks/drag reach the parent node */
+.custom-frame {
+  pointer-events: none;
+}
+
+.node-panel {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
+/* box-drawing mode: double-line borders, no rounding */
+.unicode-borders .node-panel,
+.unicode-borders .node-button,
+.unicode-borders .node-input {
+  border-style: double;
+  border-radius: 0;
+}
+
+.panel-title {
+  position: absolute;
+  top: -1px;
+  left: 8px;
+  background: var(--term-bg);
+  padding: 0 4px;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.node-button {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 2px;
+}
+
+.node-button:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.node-input {
+  border: 1px solid var(--dim);
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.input-label {
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.node-grid table {
+  border-collapse: collapse;
+  height: 100%;
+  width: 100%;
+  font-size: 14px;
+}
+
+.node-grid th {
+  color: var(--dim);
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.node-grid td {
+  text-align: left;
+  padding: 0;
+}
+
+.node-statusbar {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 14px;
+}

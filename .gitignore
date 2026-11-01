@@ -1,0 +1,8 @@
+.design-token
+designs/
+.review/
+node_modules/
+dist/
+.cursor/mcp.json
+opencode.json
+.pi/mcp.json

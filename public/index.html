@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tui-live-design</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside id="sidebar">
+      <h1>tui-live-design</h1>
+      <div id="rev-label">rev –</div>
+
+      <section id="thread" aria-label="design thread"></section>
+
+      <form id="composer">
+        <div id="chips-row">
+          <div id="chips"><span class="chips-hint">nothing selected — click elements on the canvas</span></div>
+          <button type="button" id="clear-selection" title="clear selection (Esc)">clear</button>
+        </div>
+        <textarea
+          id="composer-input"
+          rows="3"
+          placeholder="ask about the selection, or request changes…"
+        ></textarea>
+        <div class="composer-row">
+          <span class="hint">Enter to send · Shift+Enter for newline</span>
+          <button type="submit" id="send-btn">Send</button>
+        </div>
+      </form>
+    </aside>
+
+    <main id="stage">
+      <div id="term"></div>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
