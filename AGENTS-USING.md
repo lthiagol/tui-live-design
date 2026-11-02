@@ -12,6 +12,13 @@ The canvas runs as a service on the host (`make url` in the repo prints the
 tokened URLs; the token lives in `.design-token`). Point your harness at the
 MCP endpoint with **two headers**: auth, and which design you work on.
 
+One-time harness approvals to expect (harness-side policy, not ours):
+- **Cursor CLI**: `cursor-agent mcp enable tui-live-design` (or approve the
+  prompt in the IDE)
+- **pi**: start pi in the project once and trust it (`.pi/mcp.json` is
+  ignored until then)
+- **opencode**: none needed
+
 - **Cursor** — `<project>/.cursor/mcp.json`:
   ```json
   { "mcpServers": { "tui-live-design": {

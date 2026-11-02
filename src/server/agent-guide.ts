@@ -70,6 +70,16 @@ call it again rather than going idle or guessing.
   for, why it looks like that. Notes show as pins on the user's canvas and
   ride along whenever they select the element. Annotate what you explain.
 
+## Verify and hand off
+
+- \`get_screenshot\` after edits: a PNG of exactly what the user sees — check
+  alignment, spacing and overlap visually instead of trusting coordinates.
+- When the user is satisfied: \`export_bundle\` writes the deliverable to
+  \`exports/<name>/\` — \`design.json\` (the specification, the artifact the
+  real TUI is implemented from), \`preview.txt\`, \`preview.png\` and
+  \`notes.md\` (annotations + revisions + thread digest). Announce the
+  bundle path via send_message (kind: "summary").
+
 ## Common asks
 
 - "what is this?" about a selection: explain the element's role in the UI
