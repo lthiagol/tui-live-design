@@ -9,12 +9,12 @@ import type {
   UserMessage,
 } from "../shared/spec.js";
 import { themeByName } from "../shared/themes.js";
+import { isValidDesignName } from "../shared/names.js";
 
 // ---------------------------------------------------------------- cell grid
 
-// M9-lite: the design is addressed by path — /design/<name>
-const DESIGN =
-  /^\/design\/([a-zA-Z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
+// M9-lite: the design is addressed by path — /design/<name> (lowercase names)
+const DESIGN = /^\/design\/([a-z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
 
 // R2-M2: capture the token from the URL once, keep it in sessionStorage for
 // reloads, and strip it from the address bar so it doesn't linger in history.
@@ -26,7 +26,9 @@ if (TOKEN) {
   try {
     sessionStorage.setItem("tui-token", TOKEN);
     if (new URLSearchParams(location.search).get("token")) {
-      history.replaceState({}, "", "/");
+      // R3-M3: strip ONLY the token — keep /design/<name>, or a reload
+      // would silently drop the user back onto the default design
+      history.replaceState({}, "", location.pathname);
     }
   } catch {
     // storage unavailable — keep working without persistence
@@ -451,8 +453,8 @@ document.getElementById("design-select")!.addEventListener("change", (ev) => {
 });
 
 document.getElementById("design-new")!.addEventListener("click", () => {
-  const name = prompt("New design name (letters, digits, - and _):");
-  if (name && /^[a-zA-Z0-9_-]{1,40}$/.test(name)) {
+  const name = prompt("New design name (lowercase letters, digits, - and _):");
+  if (name && isValidDesignName(name.toLowerCase()) && name === name.toLowerCase()) {
     location.href = `/design/${name}${TOKEN ? `?token=${TOKEN}` : ""}`;
   }
 });

@@ -81,7 +81,7 @@ describe("validateSpec", () => {
 
   it("type-checks renderable fields (L12)", () => {
     const s = makeSpec();
-    (s.root.children![0] as Record<string, unknown>).title = 42;
+    (s.root.children![0] as unknown as Record<string, unknown>).title = 42;
     expect(validateSpec(s).errors.some((e) => e.includes("title must be a string"))).toBe(true);
   });
 });

@@ -143,6 +143,17 @@ describe("wait_for_feedback queue (H1/R2-H1)", () => {
     expect(r.timedOut).toBe(true);
   });
 
+  it("queued feedback persists through serialize/restore (R3-L8)", () => {
+    const s = sessionWith(makeSpec());
+    s.handleUserMessage({ selection: [], text: "queued for later" });
+    const state = s.serialize();
+    const s2 = new Session("test");
+    s2.restore(state);
+    return s2.waitForFeedback(100).then((r) => {
+      expect(r.messages.map((m) => m.text)).toEqual(["queued for later"]);
+    });
+  });
+
   it("messages accumulate when no agent is waiting — nothing is lost", async () => {
     const s = sessionWith(makeSpec());
     s.handleUserMessage({ selection: [], text: "queued 1" });

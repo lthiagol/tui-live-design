@@ -14,7 +14,11 @@ in their browser instantly; they select elements and send you messages back.
    via update_design (set \`spec.target\`). The "building style" — code
    export, idioms, hand-off — depends on it. Never skip this.
 1. \`get_design\` — read the current spec and rev. Always start here; that
-   rev is your \`base_rev\` for step 3.
+   rev is your \`base_rev\` for step 3. CHECK THE \`design\` FIELD in the
+   result: it names the design session you are talking to. The canvas hosts
+   many named designs (\`list_sessions\` lists them); if you were asked to
+   work on a different one, pass \`design: "<name>"\` on EVERY tool call —
+   editing the wrong design is editing someone else's work.
 2. Modify the spec (full replacement or a patch of operations).
 3. \`update_design\` — pass \`base_rev\` (the rev from step 1). If the canvas
    moved since you read it, the update is rejected: call \`get_design\` and

@@ -92,5 +92,56 @@ describe("SessionRegistry (M9-lite)", () => {
     const { registry } = makeRegistry();
     await expect(registry.getOrCreate("../evil")).rejects.toThrow(/invalid design name/);
     await expect(registry.getOrCreate("")).rejects.toThrow(/invalid design name/);
+    await expect(registry.getOrCreate("NoUppercase")).rejects.toThrow(/invalid design name/); // R3-M6
+  });
+
+  it("concurrent first access yields ONE instance (R3-H1, demonstrated split-brain)", async () => {
+    const { registry } = makeRegistry();
+    const [a, b] = await Promise.all([
+      registry.getOrCreate("race-test"),
+      registry.getOrCreate("race-test"),
+    ]);
+    expect(a).toBe(b); // same object — no split-brain
+  });
+
+  it("corrupt session files are quarantined, not silently destroyed (R3-M1)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "tui-reg-"));
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path.join(dir, "broken.json"), "{ not json");
+    const reg = new SessionRegistry(dir);
+    const s = await reg.getOrCreate("broken"); // falls back to sample, logs
+    expect(s.rev).toBe(0);
+    const files = await import("node:fs/promises").then((m) => m.readdir(dir));
+    expect(files.some((f) => f.startsWith("broken.corrupt-"))).toBe(true); // preserved
+    expect(files).not.toContain("broken.json"); // won't be overwritten
+  });
+
+  it("migration guard: legacy autosave never clobbers a migrated session (R3-C1)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "tui-reg-"));
+    const reg = new SessionRegistry(dir);
+    const s = await reg.getOrCreate("default");
+    const bigger = structuredClone(s.spec);
+    bigger.term = { cols: 90, rows: 26 };
+    bigger.root.rect = { x: 0, y: 0, w: 90, h: 26 };
+    s.applyAgentUpdate({ spec: bigger, note: "migrated work" });
+    await reg.save(s);
+    expect(await reg.hasPersisted("default")).toBe(true);
+
+    // a boot-migration attempt must NOT restore stale legacy state over it
+    const legacyState = { savedAt: "old", rev: 1, spec: makeSampleLike() };
+    if (!(await reg.hasPersisted("default"))) {
+      s.restore(legacyState);
+      await reg.save(s);
+    }
+    const after = await reg.getOrCreate("default");
+    expect(after.spec.term).toEqual({ cols: 90, rows: 26 }); // newer work kept
   });
 });
+
+function makeSampleLike() {
+  return {
+    version: 1 as const,
+    term: { cols: 80, rows: 24 },
+    root: { id: "root", kind: "root" as const, rect: { x: 0, y: 0, w: 80, h: 24 }, children: [] },
+  };
+}

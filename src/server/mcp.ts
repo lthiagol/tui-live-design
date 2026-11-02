@@ -104,7 +104,9 @@ export function createMcpServer(deps: {
         "Returns the current TUI spec (JSON) and its revision number. " +
         "Call this first to see what is currently rendered on the user's canvas. " +
         "Remember the returned rev — update_design REQUIRES it as base_rev. " +
-        "Read the design-guide resource before your first edit.",
+        "CHECK the returned `design` field: if you were asked to work on a different " +
+        "design, pass its name as the `design` argument on every tool call " +
+        "(list_sessions shows what exists). Read the design-guide resource first.",
       inputSchema: { ...DESIGN },
     },
     async ({ design }) => {

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { networkInterfaces } from "node:os";
 import { randomUUID } from "node:crypto";
 import { readFile, rename } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
@@ -10,6 +11,7 @@ import { SessionRegistry } from "./registry.js";
 import { createMcpServer } from "./mcp.js";
 import { loadDesign, saveDesign, listDesigns } from "./storage.js";
 import { isAuthorized, loadOrCreateToken, unauthorized, withSecurityHeaders } from "./auth.js";
+import { isValidDesignName } from "../shared/names.js";
 import type { ServerMessage } from "../shared/spec.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,25 +22,39 @@ const PORT = Number(process.env.PORT ?? 7422);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const TOKEN = loadOrCreateToken();
 
-const DESIGN_RE = /^\/design\/([a-zA-Z0-9_-]{1,40})$/;
+const DESIGN_RE = /^\/design\/([a-z0-9_-]{1,40})$/;
 
 /** browser sockets grouped by design name */
 const socketsByDesign = new Map<string, Set<WebSocket>>();
 
 const registry = new SessionRegistry(path.join(__dirname, "../../sessions"));
 
-// one-time migration: the pre-M9lite shared autosave becomes sessions/default.json
+// R3-C1: one-time legacy migration — guarded so it can NEVER clobber a
+// design that has already been migrated; the legacy file is renamed away.
 (async () => {
   try {
-    const legacy = JSON.parse(await readFile(path.join(__dirname, "../../designs/autosave.json"), "utf8"));
+    const legacyPath = path.join(__dirname, "../../designs/autosave.json");
+    const legacy = JSON.parse(await readFile(legacyPath, "utf8"));
+    if (await registry.hasPersisted("default")) {
+      console.log("[boot] legacy autosave present but sessions/default.json exists — migration already done, skipping");
+      return;
+    }
     const session = await registry.getOrCreate("default");
     session.restore(legacy);
     await registry.save(session);
+    await rename(legacyPath, `${legacyPath}.migrated`).catch(() => {});
     console.log(`[boot] migrated legacy autosave → sessions/default.json (rev ${session.rev})`);
-  } catch {
-    // nothing to migrate
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("[boot] legacy migration failed:", err instanceof Error ? err.message : err);
+    }
+    // ENOENT = nothing to migrate
   }
 })();
+
+/** R3-H2: per-request context — a blocking tool call pins ITS OWN request's
+ * socket even when other MCP requests interleave on the same connection. */
+const requestContext = new AsyncLocalStorage<{ pendingEntry: { socket: import("node:net").Socket; done: boolean } }>();
 
 function broadcast(design: string, msg: ServerMessage) {
   const data = JSON.stringify(msg);
@@ -46,10 +62,30 @@ function broadcast(design: string, msg: ServerMessage) {
   if (!set) return;
   for (const ws of set) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    if (ws.bufferedAmount > 1 << 20) continue; // R2-M4: skip slow consumers
+    if (ws.bufferedAmount > 1 << 20) {
+      // R2-M4 + R3-L5: mark slow consumers stale instead of dropping silently —
+      // a sweep re-syncs them from the live spec once their buffer drains
+      (ws as WebSocket & { __stale?: boolean }).__stale = true;
+      continue;
+    }
     ws.send(data);
   }
 }
+
+// R3-L5: resync sweep — stale sockets get a fresh spec when they drain
+setInterval(() => {
+  for (const [design, set] of socketsByDesign) {
+    const session = registry.peek(design);
+    if (!session) continue;
+    for (const ws of set) {
+      const marked = ws as WebSocket & { __stale?: boolean };
+      if (marked.__stale && ws.readyState === WebSocket.OPEN && ws.bufferedAmount < (1 << 18)) {
+        marked.__stale = false;
+        ws.send(JSON.stringify({ type: "spec", spec: session.spec, rev: session.rev }));
+      }
+    }
+  }
+}, 5_000).unref();
 
 // registry side effects: scoped broadcast + per-session autosave on every rev
 registry.onSessionMessage = (session, msg) => {
@@ -133,9 +169,12 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
       resolveSession: (design) => registry.getOrCreate(design ?? headerDesign),
       listSessions: () => registry.list(),
       ownLiveness: () => {
-        const last = entryRef.pending.at(-1);
-        if (!last) return undefined;
-        return () => !last.done && !last.socket.destroyed;
+        // R3-H2: via AsyncLocalStorage this is ALWAYS this request's entry,
+        // regardless of concurrent requests on the same connection
+        const store = requestContext.getStore();
+        if (!store) return undefined;
+        const mine = store.pendingEntry;
+        return () => !mine.done && !mine.socket.destroyed;
       },
     });
     const entryRef: McpEntry = { server, transport, lastSeen: Date.now(), pending: [] };
@@ -160,7 +199,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
 
   try {
     const body = req.method === "POST" ? await readJsonBody(req) : undefined;
-    await entry.transport.handleRequest(req, res, body);
+    await requestContext.run({ pendingEntry }, () => entry.transport.handleRequest(req, res, body));
   } catch (err) {
     console.error("[mcp] request error:", err instanceof Error ? err.message : err);
     endError(res, 400, "bad request");
@@ -213,19 +252,29 @@ const httpServer = createServer(async (req, res) => {
     }
 
     // per-design API routes: ?design=<name> (default: "default")
-    const designName = url.searchParams.get("design") ?? "default";
-
     if (url.pathname === "/mcp") {
       await handleMcp(req, res);
       return;
     }
 
+    // R3-L1: materialize sessions only in routes that actually use one
     if (url.pathname === "/api/sessions") {
       res.writeHead(200, withSecurityHeaders({ "content-type": "application/json" }));
       res.end(JSON.stringify(await registry.list()));
       return;
     }
 
+    if (url.pathname === "/api/design/list") {
+      res.writeHead(200, withSecurityHeaders({ "content-type": "application/json" }));
+      res.end(JSON.stringify(await listDesigns()));
+      return;
+    }
+
+    const designName = url.searchParams.get("design") ?? "default";
+    if (!isValidDesignName(designName)) {
+      endError(res, 400, `invalid design name "${designName}"`);
+      return;
+    }
     const session = await registry.getOrCreate(designName);
 
     if (url.pathname === "/api/design/save" && req.method === "POST") {
@@ -249,11 +298,6 @@ const httpServer = createServer(async (req, res) => {
       }
       res.writeHead(200, withSecurityHeaders({ "content-type": "application/json" }));
       res.end(JSON.stringify({ ok: true, rev: reply.rev }));
-      return;
-    }
-    if (url.pathname === "/api/design/list") {
-      res.writeHead(200, withSecurityHeaders({ "content-type": "application/json" }));
-      res.end(JSON.stringify(await listDesigns()));
       return;
     }
     if (url.pathname === "/api/spec") {
@@ -283,7 +327,7 @@ httpServer.on("upgrade", (req, socket, head) => {
     return;
   }
   const design = url.searchParams.get("s") ?? "default";
-  if (!/^[a-zA-Z0-9_-]{1,40}$/.test(design)) {
+  if (!isValidDesignName(design)) {
     socket.write("HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n");
     socket.destroy();
     return;
@@ -342,7 +386,7 @@ httpServer.listen(PORT, HOST, () => {
     for (const a of addrs ?? []) {
       if (a.family === "IPv4" && !a.internal) {
         console.log(`  → http://${a.address}:${PORT}/?token=${TOKEN}`);
-        console.log(`  → http://${a.address}:${PORT}/design/<name>/?token=${TOKEN}`);
+        console.log(`  → http://${a.address}:${PORT}/design/<name>?token=${TOKEN}`);
       }
     }
   }

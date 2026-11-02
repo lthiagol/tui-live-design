@@ -25,14 +25,20 @@ function themeByName(name) {
   return THEMES[name ?? ""] ?? THEMES.tokyonight;
 }
 
+// src/shared/names.ts
+var DESIGN_NAME_RE = /^[a-z0-9_-]{1,40}$/;
+function isValidDesignName(name) {
+  return DESIGN_NAME_RE.test(name);
+}
+
 // src/client/main.ts
-var DESIGN = /^\/design\/([a-zA-Z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
+var DESIGN = /^\/design\/([a-z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
 var TOKEN = new URLSearchParams(location.search).get("token") ?? sessionStorage.getItem("tui-token") ?? "";
 if (TOKEN) {
   try {
     sessionStorage.setItem("tui-token", TOKEN);
     if (new URLSearchParams(location.search).get("token")) {
-      history.replaceState({}, "", "/");
+      history.replaceState({}, "", location.pathname);
     }
   } catch {
   }
@@ -396,8 +402,8 @@ document.getElementById("design-select").addEventListener("change", (ev) => {
   if (name && name !== DESIGN) location.href = `/design/${name}${TOKEN ? `?token=${TOKEN}` : ""}`;
 });
 document.getElementById("design-new").addEventListener("click", () => {
-  const name = prompt("New design name (letters, digits, - and _):");
-  if (name && /^[a-zA-Z0-9_-]{1,40}$/.test(name)) {
+  const name = prompt("New design name (lowercase letters, digits, - and _):");
+  if (name && isValidDesignName(name.toLowerCase()) && name === name.toLowerCase()) {
     location.href = `/design/${name}${TOKEN ? `?token=${TOKEN}` : ""}`;
   }
 });

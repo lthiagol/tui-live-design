@@ -101,6 +101,7 @@ export class Session {
     spec: TuiSpec;
     revisionNotes: Array<{ rev: number; at: string; note: string }>;
     threadHistory: Array<{ who: "user" | "agent"; kind?: string; text: string; at: string }>;
+    pendingMessages: UserMessage[];
   } {
     return {
       savedAt: new Date().toISOString(),
@@ -108,6 +109,7 @@ export class Session {
       spec: structuredClone(this.spec),
       revisionNotes: this.revisions.map(({ rev, at, note }) => ({ rev, at, note })),
       threadHistory: structuredClone(this.threadHistory),
+      pendingMessages: structuredClone(this.pendingMessages), // R3-L8: queued feedback survives restarts
     };
   }
 
@@ -117,6 +119,7 @@ export class Session {
     spec?: TuiSpec;
     revisionNotes?: Array<{ rev: number; at: string; note: string }>;
     threadHistory?: Array<{ who: "user" | "agent"; kind?: string; text: string; at: string }>;
+    pendingMessages?: UserMessage[];
   }): void {
     if (state.spec?.version === 1 && state.spec.root) {
       this.spec = structuredClone(state.spec);
@@ -128,6 +131,10 @@ export class Session {
         this.revisions.push({ rev: this.rev, at: new Date().toISOString(), note: "restored", spec: structuredClone(this.spec) });
       }
       this.threadHistory = Array.isArray(state.threadHistory) ? state.threadHistory.slice(-200) : [];
+      // R3-L8: restore queued feedback (bounded at write time, re-bound here)
+      this.pendingMessages = Array.isArray(state.pendingMessages)
+        ? state.pendingMessages.slice(0, 50).filter((m) => m && typeof m.text === "string")
+        : [];
     }
   }
 
@@ -250,6 +257,7 @@ export class Session {
     timeoutMs: number,
     signal?: AbortSignal,
     liveness?: () => boolean,
+    pollMs = 2_000, // R3-M5: explicit poll interval (tests use a fast one)
   ): Promise<{ messages: UserMessage[]; timedOut: boolean }> {
     if (this.pendingMessages.length > 0) {
       return { messages: this.drain(), timedOut: false };
@@ -282,7 +290,7 @@ export class Session {
       if (liveness) {
         poll = setInterval(() => {
           if (!liveness()) waiter.cancel();
-        }, 2_000);
+        }, pollMs);
         poll.unref();
       }
       if (signal) {
