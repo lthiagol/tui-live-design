@@ -18,8 +18,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "../../public");
 
 const PORT = Number(process.env.PORT ?? 7422);
-/** Bind address. 0.0.0.0 is safe-ish ONLY because every request requires the token (C1). */
-const HOST = process.env.HOST ?? "0.0.0.0";
+/** Bind address. Secure-by-default: loopback. Explicitly set HOST=0.0.0.0 for
+ * LAN access (the launchd service plist does) — the token still gates everything. */
+const HOST = process.env.HOST ?? "127.0.0.1";
 const TOKEN = loadOrCreateToken();
 
 // M9-lite: browser designs are addressed by path (grammar lives in shared/names.ts)
