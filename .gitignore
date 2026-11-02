@@ -1,10 +1,15 @@
 .design-token
 designs/
+sessions/
 .review/
+exports/
 node_modules/
 dist/
 .cursor/mcp.json
 opencode.json
 .pi/mcp.json
+public/app.js
+public/app.js.map
+*.png
 exports/
 sessions/

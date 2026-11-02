@@ -2,7 +2,7 @@
 # `make` or `make help` lists targets. Long-running targets (dev, logs) Ctrl+C to stop.
 
 TOKEN := $(shell cat .design-token 2>/dev/null)
-URL   := http://192.168.69.60:7422
+URL ?= http://192.168.69.60:7422  # override: make url URL=http://...
 MCP   := $(URL)/mcp
 AUTH  := -H "Authorization: Bearer $(TOKEN)" -H "content-type: application/json" -H "accept: application/json, text/event-stream"
 
