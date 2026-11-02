@@ -82,8 +82,6 @@ export class Session {
 
   /** blocked wait_for_feedback consumers, FIFO — longest-waiting first */
   private waiters: Waiter[] = [];
-  /** R2-H1: liveness provider injected by the server (per-request socket checks) */
-  private waitLivenessProvider: (() => () => boolean) | null = null;
 
   constructor(id: string) {
     this.id = id;
@@ -94,6 +92,43 @@ export class Session {
       note: "initial sample",
       spec: structuredClone(this.spec), // never alias the live spec (L9)
     });
+  }
+
+  /** Persisted session state (M9-lite): spec + rev + revision notes + thread. */
+  serialize(): {
+    savedAt: string;
+    rev: number;
+    spec: TuiSpec;
+    revisionNotes: Array<{ rev: number; at: string; note: string }>;
+    threadHistory: Array<{ who: "user" | "agent"; kind?: string; text: string; at: string }>;
+  } {
+    return {
+      savedAt: new Date().toISOString(),
+      rev: this.rev,
+      spec: structuredClone(this.spec),
+      revisionNotes: this.revisions.map(({ rev, at, note }) => ({ rev, at, note })),
+      threadHistory: structuredClone(this.threadHistory),
+    };
+  }
+
+  /** Restore from a persisted state (no re-validation needed: it was validated when written). */
+  restore(state: {
+    rev?: number;
+    spec?: TuiSpec;
+    revisionNotes?: Array<{ rev: number; at: string; note: string }>;
+    threadHistory?: Array<{ who: "user" | "agent"; kind?: string; text: string; at: string }>;
+  }): void {
+    if (state.spec?.version === 1 && state.spec.root) {
+      this.spec = structuredClone(state.spec);
+      this.rev = typeof state.rev === "number" ? state.rev : 0;
+      this.revisions = (state.revisionNotes ?? [{ rev: 0, at: new Date().toISOString(), note: "restored" }])
+        .filter((n) => n.rev <= this.rev)
+        .map((n) => (n.rev === this.rev ? { ...n, spec: structuredClone(this.spec) } : n));
+      if (!this.revisions.some((r) => r.rev === this.rev)) {
+        this.revisions.push({ rev: this.rev, at: new Date().toISOString(), note: "restored", spec: structuredClone(this.spec) });
+      }
+      this.threadHistory = Array.isArray(state.threadHistory) ? state.threadHistory.slice(-200) : [];
+    }
   }
 
   /**
@@ -198,20 +233,6 @@ export class Session {
     const waiter = this.waiters.shift();
     if (waiter) waiter.deliver(this.drain());
     // with no waiters, messages accumulate — nothing is ever lost
-  }
-
-  /**
-   * R2-H1: the SDK never aborts tool handlers on connection death, so the
-   * server injects a liveness PROVIDER — when wait_for_feedback starts, it
-   * adopts a pinned check for its own HTTP request's socket and polls it,
-   * leaving the queue (without draining) when that connection dies.
-   */
-  setWaitLivenessProvider(fn: (() => () => boolean) | null): void {
-    this.waitLivenessProvider = fn;
-  }
-
-  getWaitLivenessProvider(): (() => () => boolean) | undefined {
-    return this.waitLivenessProvider ?? undefined;
   }
 
   /**

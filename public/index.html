@@ -9,7 +9,12 @@
   <body>
     <aside id="sidebar">
       <h1>tui-live-design</h1>
-      <div id="rev-label">rev –</div>
+      <div id="session-row">
+        <label for="design-select">design:</label>
+        <select id="design-select"></select>
+        <button type="button" id="design-new" title="create a new design">＋</button>
+      </div>
+      <div id="rev-label"><span id="design-label"></span> · rev <span id="rev-num">–</span></div>
 
       <section id="thread" aria-label="design thread"></section>
 

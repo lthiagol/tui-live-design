@@ -12,6 +12,10 @@ import { themeByName } from "../shared/themes.js";
 
 // ---------------------------------------------------------------- cell grid
 
+// M9-lite: the design is addressed by path — /design/<name>
+const DESIGN =
+  /^\/design\/([a-zA-Z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
+
 // R2-M2: capture the token from the URL once, keep it in sessionStorage for
 // reloads, and strip it from the address bar so it doesn't linger in history.
 const TOKEN =
@@ -410,6 +414,51 @@ document.getElementById("clear-selection")!.addEventListener("click", clearSelec
 
 const threadEl = document.getElementById("thread") as HTMLElement;
 
+// M9-lite discovery: design switcher (recommended flow — tool + API + sidebar)
+document.getElementById("design-label")!.textContent = DESIGN;
+
+async function refreshSessionList() {
+  try {
+    const res = await fetch("/api/sessions", {
+      headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+    });
+    const sessions = (await res.json()) as Array<{ name: string }>;
+    const select = document.getElementById("design-select") as HTMLSelectElement;
+    const current = select.value;
+    select.replaceChildren(
+      ...sessions.map((s) => {
+        const opt = document.createElement("option");
+        opt.value = s.name;
+        opt.textContent = s.name;
+        return opt;
+      }),
+      ...sessions.some((s) => s.name === DESIGN) ? [] : [(() => {
+        const opt = document.createElement("option");
+        opt.value = DESIGN;
+        opt.textContent = DESIGN;
+        return opt;
+      })()],
+    );
+    select.value = current;
+  } catch {
+    // unauthenticated or offline — switcher stays empty
+  }
+}
+
+document.getElementById("design-select")!.addEventListener("change", (ev) => {
+  const name = (ev.target as HTMLSelectElement).value;
+  if (name && name !== DESIGN) location.href = `/design/${name}${TOKEN ? `?token=${TOKEN}` : ""}`;
+});
+
+document.getElementById("design-new")!.addEventListener("click", () => {
+  const name = prompt("New design name (letters, digits, - and _):");
+  if (name && /^[a-zA-Z0-9_-]{1,40}$/.test(name)) {
+    location.href = `/design/${name}${TOKEN ? `?token=${TOKEN}` : ""}`;
+  }
+});
+
+refreshSessionList();
+
 function scrollThreadIfNearBottom() {
   const nearBottom =
     threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 80;
@@ -506,7 +555,7 @@ function wsSend(msg: ClientMessage) {
 
 // M8: reconnect with backoff; the server resyncs us by sending the spec on open
 function connect() {
-  const qs = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+  const qs = `?s=${encodeURIComponent(DESIGN)}${TOKEN ? `&token=${encodeURIComponent(TOKEN)}` : ""}`;
   ws = new WebSocket(`${wsProtocol}://${location.host}${qs}`);
 
   ws.addEventListener("message", (ev) => {
@@ -521,7 +570,7 @@ function connect() {
       case "spec":
         currentSpec = msg.spec;
         render(msg.spec);
-        document.getElementById("rev-label")!.textContent = `rev ${msg.rev}`;
+        document.getElementById("rev-num")!.textContent = String(msg.rev);
         break;
       case "user_message_echo":
         renderUserMessage(msg.message);

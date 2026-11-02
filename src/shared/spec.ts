@@ -87,7 +87,8 @@ export interface Revision {
   rev: number;
   at: string;
   note: string;
-  spec: TuiSpec;
+  /** full snapshot kept in memory only; persisted revisions store notes */
+  spec?: TuiSpec;
 }
 
 /** A picked element, as attached to a user message. */

@@ -1,16 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { Session } from "./session.js";
+import { SessionRegistry } from "./registry.js";
 import { createMcpServer } from "./mcp.js";
-import { loadDesign, listDesigns, saveDesign } from "./storage.js";
+import { loadDesign, saveDesign, listDesigns } from "./storage.js";
 import { isAuthorized, loadOrCreateToken, unauthorized, withSecurityHeaders } from "./auth.js";
-import type { ClientMessage, ServerMessage } from "../shared/spec.js";
+import type { ServerMessage } from "../shared/spec.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "../../public");
@@ -20,43 +20,46 @@ const PORT = Number(process.env.PORT ?? 7422);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const TOKEN = loadOrCreateToken();
 
-const session = new Session("default");
+const DESIGN_RE = /^\/design\/([a-zA-Z0-9_-]{1,40})$/;
 
-// Auto-persist: every spec revision lands in designs/autosave.json and is
-// restored on boot — a service restart must never silently wipe a design.
+/** browser sockets grouped by design name */
+const socketsByDesign = new Map<string, Set<WebSocket>>();
+
+const registry = new SessionRegistry(path.join(__dirname, "../../sessions"));
+
+// one-time migration: the pre-M9lite shared autosave becomes sessions/default.json
 (async () => {
   try {
-    const saved = await loadDesign("autosave");
-    const reply = session.applyAgentUpdate({
-      spec: saved.spec,
-      note: `restored autosave (was rev ${saved.rev})`,
-    });
-    console.log(`[boot] restored autosave → rev ${reply.rev}`);
+    const legacy = JSON.parse(await readFile(path.join(__dirname, "../../designs/autosave.json"), "utf8"));
+    const session = await registry.getOrCreate("default");
+    session.restore(legacy);
+    await registry.save(session);
+    console.log(`[boot] migrated legacy autosave → sessions/default.json (rev ${session.rev})`);
   } catch {
-    console.log("[boot] no autosave found — starting from sample");
+    // nothing to migrate
   }
 })();
 
-/** browser connections for the live canvas */
-const sockets = new Set<WebSocket>();
-
-/** R2-M4: skip consumers whose send buffer is backing up */
-const SLOW_CONSUMER_BYTES = 1 << 20;
-
-function broadcast(msg: ServerMessage) {
+function broadcast(design: string, msg: ServerMessage) {
   const data = JSON.stringify(msg);
-  for (const ws of sockets) {
+  const set = socketsByDesign.get(design);
+  if (!set) return;
+  for (const ws of set) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    if (ws.bufferedAmount > SLOW_CONSUMER_BYTES) continue;
+    if (ws.bufferedAmount > 1 << 20) continue; // R2-M4: skip slow consumers
     ws.send(data);
   }
+}
+
+// registry side effects: scoped broadcast + per-session autosave on every rev
+registry.onSessionMessage = (session, msg) => {
+  broadcast(session.id, msg);
   if (msg.type === "spec") {
-    saveDesign(msg.spec, msg.rev, "autosave").catch((err) =>
-      console.error("[autosave]", err instanceof Error ? err.message : err),
+    registry.save(session).catch((err) =>
+      console.error(`[autosave:${session.id}]`, err instanceof Error ? err.message : err),
     );
   }
-}
-session.onEmit = broadcast;
+};
 
 const MAX_BODY = 1 << 20; // 1 MiB — plenty for any legit design/message (H5)
 
@@ -86,7 +89,6 @@ function endError(res: ServerResponse, status: number, message: string): void {
 
 // ------------------------------------------------------------- MCP endpoint
 
-/** connected MCP agents, keyed by Mcp-Session-Id (M1: with lastSeen sweep) */
 interface McpEntry {
   server: ReturnType<typeof createMcpServer>;
   transport: StreamableHTTPServerTransport;
@@ -100,10 +102,8 @@ setInterval(() => {
   for (const [id, entry] of mcpSessions) {
     if (now - entry.lastSeen > 30 * 60_000) {
       mcpSessions.delete(id);
-      // R2-M1: close the transport too — a Map delete alone leaks the live
-      // McpServer/transport (and its ~14 registered tool closures)
       try {
-        entry.transport.close();
+        entry.transport.close(); // R2-M1: don't leak live transports
       } catch {
         // already gone
       }
@@ -117,10 +117,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   let entry = sessionId ? mcpSessions.get(sessionId) : undefined;
 
   if (req.method === "POST" && !entry) {
-    // R2-M1: a stale/reaped session id silently forking a fresh session is
-    // surprising — at least make it visible in the log
     if (sessionId) console.log(`[mcp] unknown/expired session id ${sessionId} — creating fresh session`);
-    // new MCP session: fresh transport + server bound to our design session
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       enableJsonResponse: true,
@@ -129,13 +126,25 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
         console.log(`[mcp] agent connected: ${id}`);
       },
     });
-    const server = createMcpServer(session);
+    // per-connection default design (hybrid selection): X-Design header,
+    // overridable per tool call via the design argument
+    const headerDesign = (req.headers["x-design"] as string | undefined) || "default";
+    const server = createMcpServer({
+      resolveSession: (design) => registry.getOrCreate(design ?? headerDesign),
+      listSessions: () => registry.list(),
+      ownLiveness: () => {
+        const last = entryRef.pending.at(-1);
+        if (!last) return undefined;
+        return () => !last.done && !last.socket.destroyed;
+      },
+    });
+    const entryRef: McpEntry = { server, transport, lastSeen: Date.now(), pending: [] };
     transport.onclose = () => {
       const id = transport.sessionId;
       if (id) mcpSessions.delete(id);
       console.log(`[mcp] agent disconnected: ${id}`);
     };
-    entry = { server, transport, lastSeen: Date.now(), pending: [] };
+    entry = entryRef;
     await server.connect(transport);
   }
 
@@ -145,15 +154,9 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   }
   entry.lastSeen = Date.now();
 
-  // R2-H1: expose per-request liveness — a blocking tool call adopts the
-  // newest pending request (its own) and stays alive only while that
-  // request's socket lives. Dead client → poll fires within ~2s.
+  // R2-H1: track this request's socket so blocking tool calls can pin liveness
   const pendingEntry = { socket: req.socket, done: false };
   entry.pending.push(pendingEntry);
-  session.setWaitLivenessProvider(() => {
-    const mine = pendingEntry;
-    return () => !mine.done && !mine.socket.destroyed;
-  });
 
   try {
     const body = req.method === "POST" ? await readJsonBody(req) : undefined;
@@ -162,7 +165,6 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
     console.error("[mcp] request error:", err instanceof Error ? err.message : err);
     endError(res, 400, "bad request");
   } finally {
-    // R2-H1: request finished (normally or not) — stop being anyone's liveness anchor
     pendingEntry.done = true;
     const idx = entry.pending.indexOf(pendingEntry);
     if (idx >= 0) entry.pending.splice(idx, 1);
@@ -175,16 +177,20 @@ const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
 
   try {
-    // Static assets are PUBLIC: subresource requests (<script>/<link>) can't
-    // carry the URL token, and the shell is inert without the tokened API.
-    // Everything that matters — /api/*, /mcp, the WS upgrade — stays gated.
-    const staticPath = url.pathname === "/" || url.pathname === "/index.html"
-      ? "index.html"
-      : url.pathname === "/app.js"
-        ? "app.js"
-        : url.pathname === "/style.css"
-          ? "style.css"
-          : null;
+    // Static assets are PUBLIC: subresource requests can't carry the URL
+    // token, and the shell is inert without the tokened API. /design/<name>
+    // serves the same shell — the client reads the design from the path.
+    const designMatch = url.pathname.match(DESIGN_RE);
+    const staticPath =
+      url.pathname === "/" || url.pathname === "/index.html"
+        ? "index.html"
+        : url.pathname === "/app.js"
+          ? "app.js"
+          : url.pathname === "/style.css"
+            ? "style.css"
+            : designMatch
+              ? "index.html"
+              : null;
 
     // C1: everything except the static shell requires the token
     if (!staticPath && !isAuthorized(req, url, TOKEN)) {
@@ -200,16 +206,27 @@ const httpServer = createServer(async (req, res) => {
         : "text/css";
       res.writeHead(200, withSecurityHeaders({
         "content-type": type,
-        "cache-control": "no-store", // never serve a stale shell again
+        "cache-control": "no-store",
       }));
       res.end(contents);
       return;
     }
 
+    // per-design API routes: ?design=<name> (default: "default")
+    const designName = url.searchParams.get("design") ?? "default";
+
     if (url.pathname === "/mcp") {
       await handleMcp(req, res);
       return;
     }
+
+    if (url.pathname === "/api/sessions") {
+      res.writeHead(200, withSecurityHeaders({ "content-type": "application/json" }));
+      res.end(JSON.stringify(await registry.list()));
+      return;
+    }
+
+    const session = await registry.getOrCreate(designName);
 
     if (url.pathname === "/api/design/save" && req.method === "POST") {
       const body = (await readJsonBody(req)) as { name?: string };
@@ -240,7 +257,7 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/spec") {
-      const body = JSON.stringify({ rev: session.rev, spec: session.spec });
+      const body = JSON.stringify({ design: designName, rev: session.rev, spec: session.spec });
       res.writeHead(200, withSecurityHeaders({ "content-type": "application/json" }));
       res.end(body);
       return;
@@ -248,7 +265,6 @@ const httpServer = createServer(async (req, res) => {
 
     res.writeHead(404, withSecurityHeaders({ "content-type": "text/plain" }));
     res.end("not found");
-    return;
   } catch (err) {
     // C3: nothing may escape the handler — a bad body must not kill the server
     console.error("[http]", err instanceof Error ? err.message : err);
@@ -256,7 +272,7 @@ const httpServer = createServer(async (req, res) => {
   }
 });
 
-// C1: gate the WebSocket upgrade on the token too
+// C1 + M9-lite: gate the WS upgrade; the design comes from ?s=<name>
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY });
 
 httpServer.on("upgrade", (req, socket, head) => {
@@ -266,43 +282,58 @@ httpServer.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  const design = url.searchParams.get("s") ?? "default";
+  if (!/^[a-zA-Z0-9_-]{1,40}$/.test(design)) {
+    socket.write("HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, design));
 });
 
-// R2-M4: per-connection rate limit for user_message bursts
 const USER_MSG_WINDOW_MS = 10_000;
 const USER_MSG_MAX_PER_WINDOW = 10;
 
-wss.on("connection", (ws) => {
-  sockets.add(ws);
-  ws.send(JSON.stringify({ type: "spec", spec: session.spec, rev: session.rev }));
-  const recentMessages: number[] = [];
-
-  ws.on("message", (raw) => {
-    try {
-      const msg = JSON.parse(String(raw)) as ClientMessage;
-      if (msg.type === "user_message") {
-        const now = Date.now();
-        while (recentMessages.length > 0 && now - recentMessages[0]! > USER_MSG_WINDOW_MS) {
-          recentMessages.shift();
-        }
-        if (recentMessages.length >= USER_MSG_MAX_PER_WINDOW) {
-          ws.send(JSON.stringify({
-            type: "error",
-            message: `rate limited: max ${USER_MSG_MAX_PER_WINDOW} messages per ${USER_MSG_WINDOW_MS / 1000}s`,
-          }));
-          return;
-        }
-        recentMessages.push(now);
-      }
-      session.handleClientMessage(msg);
-    } catch (err) {
-      ws.send(JSON.stringify({ type: "error", message: err instanceof Error ? err.message : String(err) }));
+wss.on("connection", (ws: WebSocket, design: string) => {
+  const set = socketsByDesign.get(design) ?? new Set<WebSocket>();
+  set.add(ws);
+  socketsByDesign.set(design, set);
+  registry.getOrCreate(design).then((session) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "spec", spec: session.spec, rev: session.rev }));
     }
   });
 
-  ws.on("close", () => sockets.delete(ws));
-  ws.on("error", () => sockets.delete(ws));
+  const recentMessages: number[] = [];
+
+  ws.on("message", (raw) => {
+    void (async () => {
+      try {
+        const msg = JSON.parse(String(raw)) as { type?: string; message?: unknown };
+        if (msg.type === "user_message") {
+          const now = Date.now();
+          while (recentMessages.length > 0 && now - recentMessages[0]! > USER_MSG_WINDOW_MS) {
+            recentMessages.shift();
+          }
+          if (recentMessages.length >= USER_MSG_MAX_PER_WINDOW) {
+            ws.send(JSON.stringify({
+              type: "error",
+              message: `rate limited: max ${USER_MSG_MAX_PER_WINDOW} messages per ${USER_MSG_WINDOW_MS / 1000}s`,
+            }));
+            return;
+          }
+          recentMessages.push(now);
+        }
+        const session = await registry.getOrCreate(design);
+        session.handleClientMessage(msg as never);
+      } catch (err) {
+        ws.send(JSON.stringify({ type: "error", message: err instanceof Error ? err.message : String(err) }));
+      }
+    })();
+  });
+
+  ws.on("close", () => socketsByDesign.get(design)?.delete(ws));
+  ws.on("error", () => socketsByDesign.get(design)?.delete(ws));
 });
 
 httpServer.listen(PORT, HOST, () => {
@@ -311,6 +342,7 @@ httpServer.listen(PORT, HOST, () => {
     for (const a of addrs ?? []) {
       if (a.family === "IPv4" && !a.internal) {
         console.log(`  → http://${a.address}:${PORT}/?token=${TOKEN}`);
+        console.log(`  → http://${a.address}:${PORT}/design/<name>/?token=${TOKEN}`);
       }
     }
   }

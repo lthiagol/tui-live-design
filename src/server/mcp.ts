@@ -1,25 +1,42 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { Session } from "./session.js";
 import { renderSpecToSvg } from "../shared/svg.js";
+import { renderSpecToText } from "../shared/text.js";
+import { themeByName } from "../shared/themes.js";
 import { Resvg } from "@resvg/resvg-js";
 import { AGENT_GUIDE, GUIDE_URI } from "./agent-guide.js";
 import { listDesigns, loadDesign, saveDesign } from "./storage.js";
 import { writeBundle } from "./export/bundle.js";
-import { renderSpecToText } from "../shared/text.js";
 import { exportRatatui } from "./export/ratatui.js";
 import type { PatchOp } from "../shared/patch.js";
+import type { Session } from "./session.js";
 
 /**
  * MCP adapter — makes the design canvas usable by ANY agent harness.
- * Transport is streamable-HTTP on the same server (/mcp), so agents can
- * connect over the LAN just like the browser does.
+ * Transport is streamable-HTTP on the same server (/mcp).
+ *
+ * Design selection (M9-lite, hybrid): the connection's X-Design header sets
+ * the default design; every tool accepts an optional `design` argument that
+ * overrides it. Agents working a single design never pass the argument.
  */
-export function createMcpServer(session: Session): McpServer {
+export function createMcpServer(deps: {
+  resolveSession: (design?: string) => Promise<Session>;
+  /** adopts THIS request's socket as a liveness check (R2-H1) */
+  ownLiveness: () => (() => boolean) | undefined;
+  /** discovery (M9-lite): all design sessions */
+  listSessions: () => Promise<Array<{ name: string; rev: number; savedAt: string }>>;
+}): McpServer {
   const server = new McpServer({
     name: "tui-live-design",
-    version: "0.1.0",
+    version: "0.2.0",
   });
+
+  const DESIGN = {
+    design: z
+      .string()
+      .optional()
+      .describe('Design (session) name; defaults to the X-Design header or "default"'),
+  };
 
   // ---- the design guide: resource + prompt, so any harness gets the workflow
   server.registerResource(
@@ -54,8 +71,9 @@ export function createMcpServer(session: Session): McpServer {
               "You are co-designing a TUI with me on a live canvas (tui-live-design). " +
               "First read the design guide resource (" +
               GUIDE_URI +
-              "), then get_design and follow the loop: edit → update_design → " +
-              "wait_for_feedback → send_message. Ask me before making big structural decisions.",
+              "), then get_design and follow the loop: ask my target runtime → edit → " +
+              "update_design (with base_rev) → wait_for_feedback → send_message. " +
+              "Ask me before making big structural decisions.",
           },
         },
       ],
@@ -63,6 +81,20 @@ export function createMcpServer(session: Session): McpServer {
   );
 
   // ---- tools
+
+  server.registerTool(
+    "list_sessions",
+    {
+      title: "List design sessions",
+      description:
+        "Names, revisions and save times of all design sessions on this canvas. " +
+        "Pass a name as the `design` argument on any tool to work on that design.",
+      inputSchema: {},
+    },
+    async () => ({
+      content: [{ type: "text" as const, text: JSON.stringify(await deps.listSessions(), null, 2) }],
+    }),
+  );
 
   server.registerTool(
     "get_design",
@@ -73,16 +105,23 @@ export function createMcpServer(session: Session): McpServer {
         "Call this first to see what is currently rendered on the user's canvas. " +
         "Remember the returned rev — update_design REQUIRES it as base_rev. " +
         "Read the design-guide resource before your first edit.",
-      inputSchema: {},
+      inputSchema: { ...DESIGN },
     },
-    async () => ({
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({ rev: session.rev, spec: session.spec }, null, 2),
-        },
-      ],
-    }),
+    async ({ design }) => {
+      const session = await deps.resolveSession(design);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              { design: session.id, rev: session.rev, spec: session.spec },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
@@ -109,12 +148,13 @@ export function createMcpServer(session: Session): McpServer {
         base_rev: z
           .number()
           .describe(
-            "REQUIRED: the rev you based your edit on (from get_design). If the canvas has " +
-            "moved since, the update is REJECTED — prevents clobbering concurrent edits.",
+            "REQUIRED: the rev you based your edit on (from get_design of THIS design). " +
+            "If the canvas has moved since, the update is REJECTED — prevents clobbering.",
           ),
+        ...DESIGN,
       },
     },
-    async ({ spec, ops, note, base_rev }) => {
+    async ({ spec, ops, note, base_rev, design }) => {
       if (ops !== undefined && spec !== undefined) {
         return {
           content: [{ type: "text" as const, text: "Error: pass either `ops` or `spec`, not both" }],
@@ -127,6 +167,7 @@ export function createMcpServer(session: Session): McpServer {
           isError: true,
         };
       }
+      const session = await deps.resolveSession(design);
       const mode =
         ops !== undefined
           ? `patch with ${ops.length} op${ops.length === 1 ? "" : "s"}`
@@ -152,7 +193,7 @@ export function createMcpServer(session: Session): McpServer {
           {
             type: "text" as const,
             text:
-              `Applied (${mode}) — canvas is now at rev ${reply.rev}. ` +
+              `Applied (${mode}) — design "${session.id}" is now at rev ${reply.rev}. ` +
               `The user sees it live; next, call wait_for_feedback for their response.${warning}`,
           },
         ],
@@ -172,12 +213,17 @@ export function createMcpServer(session: Session): McpServer {
         scale: z
           .number()
           .optional()
-          .describe("Pixel scale of the render (default 2 = retina-ish)"),
+          .describe("Pixel scale of the render (default 2, clamped 0.5..4)"),
+        ...DESIGN,
       },
     },
-    async ({ scale }) => {
+    async ({ scale, design }) => {
+      const session = await deps.resolveSession(design);
       const clamped = Math.min(Math.max(scale ?? 2, 0.5), 4); // M4: cap raster size
-      const svg = renderSpecToSvg(session.spec, { scale: clamped });
+      const svg = renderSpecToSvg(session.spec, {
+        scale: clamped,
+        theme: themeByName(session.spec.theme).colors,
+      });
       const png = new Resvg(svg, { font: { loadSystemFonts: true } }).render().asPng();
       return {
         content: [
@@ -208,20 +254,59 @@ export function createMcpServer(session: Session): McpServer {
           .number()
           .optional()
           .describe("Max wait in ms (default 25000, max 120000)"),
+        ...DESIGN,
       },
     },
-    async ({ timeout_ms }, extra) => {
-      // R2-H1: pin liveness to THIS request's socket; SDK signal covers
-      // well-behaved cancellation (notifications/cancelled, transport close)
-      const liveness = session.getWaitLivenessProvider()?.();
+    async ({ timeout_ms, design }, extra) => {
+      const session = await deps.resolveSession(design);
+      const liveness = deps.ownLiveness();
       const result = await session.waitForFeedback(
         Math.min(timeout_ms ?? 25_000, 120_000),
-        extra?.signal,
-        liveness,
+        extra?.signal, // R2-H1: cancelled notifications / transport close
+        liveness, // R2-H1: raw connection death
       );
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ design: session.id, ...result }, null, 2) }],
       };
+    },
+  );
+
+  server.registerTool(
+    "send_message",
+    {
+      title: "Send a message to the user",
+      description:
+        "Post text to the user's inbox thread on the design canvas — explanations, " +
+        "answers to their questions, or summaries of what you changed. Use kind " +
+        "'question' when you need the user to decide something; they will see it " +
+        "prominently and can reply from the inbox.",
+      inputSchema: {
+        text: z.string().describe("Message text (plain text, max 16k chars)"),
+        kind: z
+          .enum(["note", "question", "summary"])
+          .optional()
+          .describe("note = info/explanation, question = needs a reply, summary = recap of changes"),
+        ...DESIGN,
+      },
+    },
+    async ({ text, kind, design }) => {
+      try {
+        const session = await deps.resolveSession(design);
+        const message = session.addAgentMessage(text, kind ?? "note");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Delivered to design "${session.id}"'s inbox (${message.kind}, ${message.at}).`,
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : err}` }],
+          isError: true,
+        };
+      }
     },
   );
 
@@ -236,9 +321,11 @@ export function createMcpServer(session: Session): McpServer {
       inputSchema: {
         id: z.string().describe("Element id"),
         text: z.string().nullable().describe("The note, or null to remove"),
+        ...DESIGN,
       },
     },
-    async ({ id, text }) => {
+    async ({ id, text, design }) => {
+      const session = await deps.resolveSession(design);
       const reply = session.applyAgentUpdate({
         ops: [{ op: "annotate", id, text }],
         note: `annotate ${id}`,
@@ -256,53 +343,18 @@ export function createMcpServer(session: Session): McpServer {
   );
 
   server.registerTool(
-    "send_message",
-    {
-      title: "Send a message to the user",
-      description:
-        "Post text to the user's inbox thread on the design canvas — explanations, " +
-        "answers to their questions, or summaries of what you changed. Use kind " +
-        "'question' when you need the user to decide something; they will see it " +
-        "prominently and can reply from the inbox.",
-      inputSchema: {
-        text: z.string().describe("Message text (plain text)"),
-        kind: z
-          .enum(["note", "question", "summary"])
-          .optional()
-          .describe("note = info/explanation, question = needs a reply, summary = recap of changes"),
-      },
-    },
-    async ({ text, kind }) => {
-      try {
-        const message = session.addAgentMessage(text, kind ?? "note");
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Delivered to the user's inbox (${message.kind}, ${message.at}).`,
-            },
-          ],
-        };
-      } catch (err) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : err}` }],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  server.registerTool(
     "save_design",
     {
       title: "Save the design to disk",
-      description: "Persists the current spec under a name (default: the session id).",
+      description: "Persists the current spec under a name (default: the design's id).",
       inputSchema: {
-        name: z.string().optional().describe("Design name (letters, digits, - and _)"),
+        name: z.string().optional().describe("Snapshot name (letters, digits, - and _)"),
+        ...DESIGN,
       },
     },
-    async ({ name }) => {
+    async ({ name, design }) => {
       try {
+        const session = await deps.resolveSession(design);
         const file = await saveDesign(session.spec, session.rev, name ?? session.id);
         return { content: [{ type: "text" as const, text: `Saved to ${file} (rev ${session.rev}).` }] };
       } catch (err) {
@@ -320,11 +372,13 @@ export function createMcpServer(session: Session): McpServer {
         "Intentionally NOT base_rev-guarded (R2-L8): load is an explicit 'replace everything' — " +
         "never call it while another agent is mid-edit.",
       inputSchema: {
-        name: z.string().optional().describe("Design name (default: the session id)"),
+        name: z.string().optional().describe("Snapshot name (default: the design's id)"),
+        ...DESIGN,
       },
     },
-    async ({ name }) => {
+    async ({ name, design }) => {
       try {
+        const session = await deps.resolveSession(design);
         const saved = await loadDesign(name ?? session.id);
         const reply = session.applyAgentUpdate({
           spec: saved.spec,
@@ -348,8 +402,8 @@ export function createMcpServer(session: Session): McpServer {
   server.registerTool(
     "list_designs",
     {
-      title: "List saved designs",
-      description: "Names and timestamps of designs saved on disk.",
+      title: "List saved design snapshots",
+      description: "Names and timestamps of design snapshots saved on disk (save_design).",
       inputSchema: {},
     },
     async () => ({
@@ -369,11 +423,13 @@ export function createMcpServer(session: Session): McpServer {
         "preview.png, and notes.md (annotations + revisions + thread digest). This is the " +
         "deliverable for implementing the real TUI.",
       inputSchema: {
-        name: z.string().optional().describe("Bundle name (default: session id)"),
+        name: z.string().optional().describe("Bundle name (default: the design's id)"),
+        ...DESIGN,
       },
     },
-    async ({ name }) => {
+    async ({ name, design }) => {
       try {
+        const session = await deps.resolveSession(design);
         const { dir, files } = await writeBundle(session, name ?? session.id);
         const preview = renderSpecToText(session.spec);
         return {
@@ -403,9 +459,11 @@ export function createMcpServer(session: Session): McpServer {
           .enum(["ratatui"])
           .optional()
           .describe("Export target; defaults to spec.target when set"),
+        ...DESIGN,
       },
     },
-    async ({ target }) => {
+    async ({ target, design }) => {
+      const session = await deps.resolveSession(design);
       const chosen = target ?? session.spec.target;
       if (chosen !== "ratatui") {
         return {
@@ -431,21 +489,24 @@ export function createMcpServer(session: Session): McpServer {
     "get_revisions",
     {
       title: "Get revision history",
-      description: "Lists design revisions (rev, timestamp, note).",
-      inputSchema: {},
+      description: "Lists design revisions (rev, timestamp, note) for this design.",
+      inputSchema: { ...DESIGN },
     },
-    async () => ({
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(
-            session.revisions.map((r) => ({ rev: r.rev, at: r.at, note: r.note })),
-            null,
-            2,
-          ),
-        },
-      ],
-    }),
+    async ({ design }) => {
+      const session = await deps.resolveSession(design);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              session.revisions.map((r) => ({ rev: r.rev, at: r.at, note: r.note })),
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   return server;
