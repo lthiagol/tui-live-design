@@ -21,6 +21,22 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 const TOKEN = loadOrCreateToken();
 
 const session = new Session("default");
+
+// Auto-persist: every spec revision lands in designs/autosave.json and is
+// restored on boot — a service restart must never silently wipe a design.
+(async () => {
+  try {
+    const saved = await loadDesign("autosave");
+    const reply = session.applyAgentUpdate({
+      spec: saved.spec,
+      note: `restored autosave (was rev ${saved.rev})`,
+    });
+    console.log(`[boot] restored autosave → rev ${reply.rev}`);
+  } catch {
+    console.log("[boot] no autosave found — starting from sample");
+  }
+})();
+
 /** browser connections for the live canvas */
 const sockets = new Set<WebSocket>();
 
@@ -33,6 +49,11 @@ function broadcast(msg: ServerMessage) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (ws.bufferedAmount > SLOW_CONSUMER_BYTES) continue;
     ws.send(data);
+  }
+  if (msg.type === "spec") {
+    saveDesign(msg.spec, msg.rev, "autosave").catch((err) =>
+      console.error("[autosave]", err instanceof Error ? err.message : err),
+    );
   }
 }
 session.onEmit = broadcast;
