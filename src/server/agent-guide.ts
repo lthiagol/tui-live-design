@@ -9,6 +9,10 @@ in their browser instantly; they select elements and send you messages back.
 
 ## The loop
 
+0. **Before designing anything**: ask the user which runtime the REAL TUI
+   will target (Textual/ratatui/bubbletea/blessed/Ink/other) and record it
+   via update_design (set \`spec.target\`). The "building style" — code
+   export, idioms, hand-off — depends on it. Never skip this.
 1. \`get_design\` — read the current spec and rev. Always start here; that
    rev is your \`base_rev\` for step 3.
 2. Modify the spec (full replacement or a patch of operations).

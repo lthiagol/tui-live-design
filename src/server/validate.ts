@@ -184,6 +184,11 @@ export function validateSpec(spec: unknown): ValidationResult {
     if (n.annotation !== undefined && typeof n.annotation !== "string") {
       errors.push(`node "${n.id}": annotation must be a string`);
     }
+    if (s.target !== undefined && typeof s.target !== "string") {
+      errors.push("spec.target must be a string (runtime name, e.g. ratatui/textual/bubbletea)");
+    } else if (typeof s.target === "string" && s.target.length > 40) {
+      errors.push("spec.target too long (max 40 chars)");
+    }
     if (n.style !== undefined) {
       if (typeof n.style !== "object" || n.style === null) {
         errors.push(`node "${n.id}": style must be an object`);

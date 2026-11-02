@@ -87,7 +87,8 @@ primes a fresh agent.
 | `get_screenshot` | PNG of the current canvas as an image block — verify your layout visually |
 | `annotate` | Persistent note on an element (shown as ★ pin, rides along in selections) |
 | `save_design` / `load_design` / `list_designs` | Persistence under `designs/` |
-| `export_design` | Compile the spec to code (target: `ratatui`) |
+| `export_design` | Compile the spec to code (targets: `ratatui`; defaults to `spec.target`) |
+| `export_bundle` | The deliverable: `exports/<name>/` with `design.json` (the spec), `preview.txt`, `preview.png`, `notes.md` |
 | `get_revisions` | Revision history notes |
 
 ## The spec, in brief
@@ -99,6 +100,9 @@ Each node: `id` (stable, kebab-case — NEVER rename/reuse), `kind`, `rect`
 `annotation`/`children`/`customHtml` (rendered in a sandboxed iframe).
 Theme: `spec.theme` = one of `tokyonight|catppuccin|nord|gruvbox|dracula`;
 `spec.boxDrawing` = double-line border mode.
+`spec.target` = the runtime the REAL TUI will be built in
+(`ratatui|textual|bubbletea|blessed|ink|...`) — **ask the user at project
+start** (guide step 0) and set it before designing; exports use it.
 
 Validation rejects: out-of-terminal or out-of-parent rects, duplicate ids,
 bad colors (hex `#rgb/#rrggbb` or basic names only), oversized payloads

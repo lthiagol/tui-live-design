@@ -74,6 +74,8 @@ export class Session {
   revisions: Revision[] = [];
   /** user messages awaiting pickup by an agent (via wait_for_feedback) */
   pendingMessages: UserMessage[] = [];
+  /** bounded thread digest — feeds export_bundle's notes.md */
+  threadHistory: Array<{ who: "user" | "agent"; kind?: string; text: string; at: string }> = [];
 
   /** set by the server: broadcast a ServerMessage to all browsers */
   onEmit: (msg: ServerMessage) => void = () => {};
@@ -154,6 +156,8 @@ export class Session {
       at,
     };
     this.pendingMessages.push(message);
+    this.threadHistory.push({ who: "user", text: message.text, at: message.at });
+    if (this.threadHistory.length > 200) this.threadHistory.splice(0, this.threadHistory.length - 200);
     const sel = message.selection.map((s) => s.elementId).slice(0, 5).join(",");
     console.log(`[user] selection=[${sel}] text="${message.text.slice(0, 80)}"`);
     this.onEmit({ type: "user_message_echo", message });
@@ -176,6 +180,8 @@ export class Session {
       at: new Date().toISOString(),
     };
     console.log(`[agent:${kind}] "${text.slice(0, 80)}"`);
+    this.threadHistory.push({ who: "agent", kind, text, at: message.at });
+    if (this.threadHistory.length > 200) this.threadHistory.splice(0, this.threadHistory.length - 200);
     this.onEmit({ type: "agent_message", message });
     return message;
   }

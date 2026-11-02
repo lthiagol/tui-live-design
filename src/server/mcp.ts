@@ -5,6 +5,8 @@ import { renderSpecToSvg } from "../shared/svg.js";
 import { Resvg } from "@resvg/resvg-js";
 import { AGENT_GUIDE, GUIDE_URI } from "./agent-guide.js";
 import { listDesigns, loadDesign, saveDesign } from "./storage.js";
+import { writeBundle } from "./export/bundle.js";
+import { renderSpecToText } from "../shared/text.js";
 import { exportRatatui } from "./export/ratatui.js";
 import type { PatchOp } from "../shared/patch.js";
 
@@ -358,21 +360,64 @@ export function createMcpServer(session: Session): McpServer {
   );
 
   server.registerTool(
+    "export_bundle",
+    {
+      title: "Export the deliverable bundle",
+      description:
+        "Writes the hand-off bundle to exports/<name>/: design.json (THE specification — " +
+        "cell coords, ids, styles, annotations), preview.txt (character-grid render), " +
+        "preview.png, and notes.md (annotations + revisions + thread digest). This is the " +
+        "deliverable for implementing the real TUI.",
+      inputSchema: {
+        name: z.string().optional().describe("Bundle name (default: session id)"),
+      },
+    },
+    async ({ name }) => {
+      try {
+        const { dir, files } = await writeBundle(session, name ?? session.id);
+        const preview = renderSpecToText(session.spec);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Bundle written to ${dir}\nFiles: ${files.join(", ")}\n\n--- preview.txt ---\n${preview}`,
+            },
+          ],
+        };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
     "export_design",
     {
       title: "Export the design as code",
       description:
-        "Compiles the current spec into real TUI code. Target 'ratatui' (Rust) — " +
-        "cell coords map 1:1 to Rect; layout is faithful, behavior (callbacks, state) " +
-        "is stubbed for you to wire up.",
+        "Compiles the current spec into real TUI code. Cell coords map 1:1 to the target's " +
+        "layout primitives; layout is faithful, behavior (callbacks, state) is stubbed for " +
+        "you to wire up. Pass target explicitly, or rely on spec.target (set at project start).",
       inputSchema: {
-        target: z.enum(["ratatui"]).describe("Export target"),
+        target: z
+          .enum(["ratatui"])
+          .optional()
+          .describe("Export target; defaults to spec.target when set"),
       },
     },
     async ({ target }) => {
-      if (target !== "ratatui") {
+      const chosen = target ?? session.spec.target;
+      if (chosen !== "ratatui") {
         return {
-          content: [{ type: "text" as const, text: `Error: unknown target "${target}"` }],
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Error: no exporter for target "${chosen ?? "(none)"}". ` +
+                `Available exporters: ratatui. Set spec.target at project start so the right ` +
+                `exporter can be built, and ask the user which runtime the real TUI will use.`,
+            },
+          ],
           isError: true,
         };
       }

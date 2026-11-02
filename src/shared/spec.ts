@@ -74,6 +74,12 @@ export interface TuiSpec {
   theme?: string;
   /** true = double-line CSS borders for a box-drawing look */
   boxDrawing?: boolean;
+  /**
+   * Runtime the REAL TUI will be implemented in — decided at the start of
+   * every design project ("what are we building for?"), drives code export.
+   * Known: ratatui | textual | bubbletea | blessed | ink | custom
+   */
+  target?: string;
 }
 
 /** One revision of the design, kept for the timeline/undo. */

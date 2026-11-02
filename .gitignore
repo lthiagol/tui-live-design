@@ -6,3 +6,4 @@ dist/
 .cursor/mcp.json
 opencode.json
 .pi/mcp.json
+exports/
