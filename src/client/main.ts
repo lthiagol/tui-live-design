@@ -9,12 +9,12 @@ import type {
   UserMessage,
 } from "../shared/spec.js";
 import { themeByName } from "../shared/themes.js";
-import { isValidDesignName } from "../shared/names.js";
+import { isValidDesignName, DESIGN_PATH_RE } from "../shared/names.js";
 
 // ---------------------------------------------------------------- cell grid
 
 // M9-lite: the design is addressed by path — /design/<name> (lowercase names)
-const DESIGN = /^\/design\/([a-z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
+const DESIGN = DESIGN_PATH_RE.exec(location.pathname)?.[1] ?? "default";
 
 // R2-M2: capture the token from the URL once, keep it in sessionStorage for
 // reloads, and strip it from the address bar so it doesn't linger in history.

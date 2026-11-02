@@ -7,6 +7,9 @@
  */
 export const DESIGN_NAME_RE = /^[a-z0-9_-]{1,40}$/;
 
+/** The URL path form: /design/<name> — derived from the same grammar. */
+export const DESIGN_PATH_RE = /^\/design\/([a-z0-9_-]{1,40})$/;
+
 export function isValidDesignName(name: string): boolean {
   return DESIGN_NAME_RE.test(name);
 }

@@ -11,7 +11,7 @@ import { SessionRegistry } from "./registry.js";
 import { createMcpServer } from "./mcp.js";
 import { loadDesign, saveDesign, listDesigns } from "./storage.js";
 import { isAuthorized, loadOrCreateToken, unauthorized, withSecurityHeaders } from "./auth.js";
-import { isValidDesignName } from "../shared/names.js";
+import { isValidDesignName, DESIGN_PATH_RE } from "../shared/names.js";
 import type { ServerMessage } from "../shared/spec.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,7 +22,7 @@ const PORT = Number(process.env.PORT ?? 7422);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const TOKEN = loadOrCreateToken();
 
-const DESIGN_RE = /^\/design\/([a-z0-9_-]{1,40})$/;
+// M9-lite: browser designs are addressed by path (grammar lives in shared/names.ts)
 
 /** browser sockets grouped by design name */
 const socketsByDesign = new Map<string, Set<WebSocket>>();
@@ -219,7 +219,7 @@ const httpServer = createServer(async (req, res) => {
     // Static assets are PUBLIC: subresource requests can't carry the URL
     // token, and the shell is inert without the tokened API. /design/<name>
     // serves the same shell — the client reads the design from the path.
-    const designMatch = url.pathname.match(DESIGN_RE);
+    const designMatch = url.pathname.match(DESIGN_PATH_RE);
     const staticPath =
       url.pathname === "/" || url.pathname === "/index.html"
         ? "index.html"

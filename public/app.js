@@ -27,12 +27,13 @@ function themeByName(name) {
 
 // src/shared/names.ts
 var DESIGN_NAME_RE = /^[a-z0-9_-]{1,40}$/;
+var DESIGN_PATH_RE = /^\/design\/([a-z0-9_-]{1,40})$/;
 function isValidDesignName(name) {
   return DESIGN_NAME_RE.test(name);
 }
 
 // src/client/main.ts
-var DESIGN = /^\/design\/([a-z0-9_-]{1,40})$/.exec(location.pathname)?.[1] ?? "default";
+var DESIGN = DESIGN_PATH_RE.exec(location.pathname)?.[1] ?? "default";
 var TOKEN = new URLSearchParams(location.search).get("token") ?? sessionStorage.getItem("tui-token") ?? "";
 if (TOKEN) {
   try {
