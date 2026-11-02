@@ -6,7 +6,7 @@ URL   := http://192.168.69.60:7422
 MCP   := $(URL)/mcp
 AUTH  := -H "Authorization: Bearer $(TOKEN)" -H "content-type: application/json" -H "accept: application/json, text/event-stream"
 
-.PHONY: help install build test test-watch typecheck check dev serve restart stop logs url token bundle mcp-save mcp-load mcp-list clean
+.PHONY: help install build test test-watch typecheck check dev serve start stop status restart logs url token bundle mcp-save mcp-load mcp-list clean
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -34,6 +34,29 @@ dev: ## dev servers (tsx watch + esbuild watch) — stop the service first
 
 serve: ## run the built server once in the foreground (no watchers)
 	npm start
+
+start: ## start the launchd service (no-op if already running)
+	@launchctl print gui/$$(id -u)/com.tui-live-design.canvas > /dev/null 2>&1 \
+		&& echo "service already running" \
+		|| { launchctl bootstrap gui/$$(id -u) $$HOME/Library/LaunchAgents/com.tui-live-design.canvas.plist \
+			&& echo "service started"; }
+	@sleep 1
+	@$(MAKE) --no-print-directory status
+
+status: ## check whether the canvas server is up and healthy
+	@state=$$(launchctl print gui/$$(id -u)/com.tui-live-design.canvas 2>/dev/null | awk '/state =/ {print $$3; exit}'); \
+	if [ -z "$$state" ]; then \
+		echo "service:   not loaded"; \
+	else \
+		echo "service:   $$state"; \
+	fi; \
+	code=$$(curl -s -o /dev/null -w "%{http_code}" -m 3 "$(URL)/api/spec?token=$(TOKEN)"); \
+	case "$$code" in \
+		200) echo "canvas:    healthy (200)";; \
+		401) echo "canvas:    responding but token rejected (401)";; \
+		000) echo "canvas:    unreachable";; \
+		*)   echo "canvas:    unexpected ($$code)";; \
+	esac
 
 restart: ## restart the launchd service (after server-code changes)
 	npm run build
