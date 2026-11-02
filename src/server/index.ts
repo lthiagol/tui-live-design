@@ -154,9 +154,34 @@ const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
 
   try {
-    // C1: everything requires the token
-    if (!isAuthorized(req, url, TOKEN)) {
+    // Static assets are PUBLIC: subresource requests (<script>/<link>) can't
+    // carry the URL token, and the shell is inert without the tokened API.
+    // Everything that matters — /api/*, /mcp, the WS upgrade — stays gated.
+    const staticPath = url.pathname === "/" || url.pathname === "/index.html"
+      ? "index.html"
+      : url.pathname === "/app.js"
+        ? "app.js"
+        : url.pathname === "/style.css"
+          ? "style.css"
+          : null;
+
+    // C1: everything except the static shell requires the token
+    if (!staticPath && !isAuthorized(req, url, TOKEN)) {
       unauthorized(res);
+      return;
+    }
+
+    if (staticPath) {
+      const contents = await readFile(path.join(PUBLIC_DIR, staticPath));
+      const type =
+        staticPath === "index.html" ? "text/html"
+        : staticPath === "app.js" ? "text/javascript"
+        : "text/css";
+      res.writeHead(200, withSecurityHeaders({
+        "content-type": type,
+        "cache-control": "no-store", // never serve a stale shell again
+      }));
+      res.end(contents);
       return;
     }
 
@@ -200,26 +225,9 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    let file: string;
-    let type: string;
-    if (url.pathname === "/" || url.pathname === "/index.html") {
-      file = "index.html";
-      type = "text/html";
-    } else if (url.pathname === "/app.js") {
-      file = "app.js";
-      type = "text/javascript";
-    } else if (url.pathname === "/style.css") {
-      file = "style.css";
-      type = "text/css";
-    } else {
-      res.writeHead(404, withSecurityHeaders({ "content-type": "text/plain" }));
-      res.end("not found");
-      return;
-    }
-
-    const contents = await readFile(path.join(PUBLIC_DIR, file));
-    res.writeHead(200, withSecurityHeaders({ "content-type": type }));
-    res.end(contents);
+    res.writeHead(404, withSecurityHeaders({ "content-type": "text/plain" }));
+    res.end("not found");
+    return;
   } catch (err) {
     // C3: nothing may escape the handler — a bad body must not kill the server
     console.error("[http]", err instanceof Error ? err.message : err);
