@@ -24,9 +24,10 @@ export async function saveDesign(
   spec: TuiSpec,
   rev: number,
   name: string,
+  dir: string = DESIGNS_DIR,
 ): Promise<string> {
   await mkdir(DESIGNS_DIR, { recursive: true });
-  const file = path.join(DESIGNS_DIR, safeName(name));
+  const file = path.join(dir, safeName(name));
   const body: SavedDesign = { savedAt: new Date().toISOString(), rev, spec };
   // L4/R2-L10: atomic write + fsync — a crash can't corrupt, and rename
   // won't outpace the data on disk
@@ -42,8 +43,8 @@ export async function saveDesign(
   return file;
 }
 
-export async function loadDesign(name: string): Promise<SavedDesign> {
-  const file = path.join(DESIGNS_DIR, safeName(name));
+export async function loadDesign(name: string, dir: string = DESIGNS_DIR): Promise<SavedDesign> {
+  const file = path.join(dir, safeName(name));
   const raw = JSON.parse(await readFile(file, "utf8")) as SavedDesign;
   if (raw.spec?.version !== 1 || !raw.spec.root) {
     throw new Error(`${file} is not a valid saved design`);
@@ -51,16 +52,16 @@ export async function loadDesign(name: string): Promise<SavedDesign> {
   return raw;
 }
 
-export async function listDesigns(): Promise<Array<{ name: string; savedAt: string; rev: number }>> {
+export async function listDesigns(dir: string = DESIGNS_DIR): Promise<Array<{ name: string; savedAt: string; rev: number }>> {
   try {
-    const files = await readdir(DESIGNS_DIR);
+    const files = await readdir(dir);
     const out = [];
     for (const f of files.filter((f) => f.endsWith(".json")).sort()) {
       const name = f.replace(/\.json$/, "");
       try {
         // L4: savedAt/rev are the first fields we write — read only the file
         // head instead of parsing every full design
-        const fh = await open(path.join(DESIGNS_DIR, f), "r");
+        const fh = await open(path.join(dir, f), "r");
         try {
           const buf = Buffer.alloc(256);
           const { bytesRead } = await fh.read(buf, 0, 256, 0);
@@ -72,7 +73,7 @@ export async function listDesigns(): Promise<Array<{ name: string; savedAt: stri
             continue;
           }
           // fallback: unusual formatting — full parse
-          const d = JSON.parse(await readFile(path.join(DESIGNS_DIR, f), "utf8")) as SavedDesign;
+          const d = JSON.parse(await readFile(path.join(dir, f), "utf8")) as SavedDesign;
           out.push({ name, savedAt: d.savedAt, rev: d.rev });
         } finally {
           await fh.close();

@@ -45,7 +45,8 @@ export function renderSpecToText(spec: TuiSpec): string {
           break;
         case "button": {
           const label = node.title ?? node.content ?? "";
-          const inner = `[ ${label} ]`;
+          // don't double-bracket titles that already carry their own brackets
+          const inner = label.startsWith("[") || label.endsWith("]") ? label : `[ ${label} ]`;
           const sx = x + Math.max(0, Math.floor((w - inner.length) / 2));
           const sy = y + Math.floor((h - 1) / 2);
           put(sx, sy, inner);
