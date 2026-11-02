@@ -29,6 +29,10 @@ npm run dev        # server (tsx watch) + client (esbuild watch)
   token in sessionStorage and strips it from the address bar).
 - `npm run typecheck` (tsc), `npm run build` (esbuild → `public/app.js`).
   After changing server code without `npm run dev`, restart the service.
+- **Use `make`**: `make check` (typecheck + tests — run before committing),
+  `make test`, `make dev`, `make restart`, `make logs`, `make url`,
+  `make bundle NAME=x`, `make mcp-save/mcp-load/mcp-list NAME=x`, `make help`
+  lists everything.
 
 ## Connecting an agent (MCP over streamable HTTP)
 
